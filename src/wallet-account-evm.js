@@ -161,7 +161,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
     if (this._account.provider && this._config.transactionMaxFee !== undefined) {
       const { fee } = await this.quoteSendTransaction(tx)
 
-      if (fee >= this._config.transactionMaxFee) {
+      if (fee > this._config.transactionMaxFee) {
         throw new Error('Exceeded maximum fee cost for transaction operation.')
       }
     }
@@ -185,7 +185,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
 
     const { fee } = await this.quoteSendTransaction(tx)
 
-    if (this._config.transactionMaxFee !== undefined && fee >= this._config.transactionMaxFee) {
+    if (this._config.transactionMaxFee !== undefined && fee > this._config.transactionMaxFee) {
       throw new Error('Exceeded maximum fee cost for transaction operation.')
     }
 
@@ -212,7 +212,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
 
     const { fee } = await this.quoteSendTransaction(tx)
 
-    if (this._config.transferMaxFee !== undefined && fee >= this._config.transferMaxFee) {
+    if (this._config.transferMaxFee !== undefined && fee > this._config.transferMaxFee) {
       throw new Error('Exceeded maximum fee cost for transfer operation.')
     }
 
