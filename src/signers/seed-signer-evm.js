@@ -35,9 +35,9 @@ const DEFAULT_ACCOUNT_PATH = "0'/0/0"
 
 /**
  * @typedef {Object} SeedSignerEvmOpts
- * @property {MemorySafeHDNodeWallet} [root] - An existing HD node wallet root to derive from (internal; set by {@link SeedSignerEvm#derive}).
+ * @property {MemorySafeHDNodeWallet} [root] - An existing HD node wallet root to derive from.
  * @property {string} [path] - Relative BIP-44 path segment (e.g. "0'/0/0"). Defaults to the account at index 0.
- * @property {boolean} [isChild] - Internal. When true, the signer is a derived child and does not retain the root (set by {@link SeedSignerEvm#derive}).
+ * @property {boolean} [isChild] - When true, the signer is a derived child and does not retain the root.
  */
 
 /**
@@ -47,14 +47,6 @@ const DEFAULT_ACCOUNT_PATH = "0'/0/0"
  * @interface
  */
 export class ISignerEvm extends ISigner {
-  /**
-   * Whether this signer is a root (master) signer that holds the HD root and can derive children.
-   * @type {boolean}
-   */
-  get isRoot () {
-    throw new NotImplementedError('isRoot')
-  }
-
   /**
    * Whether this signer was created from a standalone private key.
    * @type {boolean}
@@ -167,7 +159,7 @@ export class ISignerEvm extends ISigner {
 export default class SeedSignerEvm extends ISignerEvm {
   /**
    * Create a SeedSignerEvm.
-   * Provide a mnemonic/seed (children built via {@link derive} pass a shared root internally).
+   * Provide either a mnemonic/seed or an existing root via opts.root (for children root is not stored internally)
    *
    * @param {string|Uint8Array|null} seed - BIP-39 mnemonic or seed bytes. Omit when providing `opts.root`.
    * @param {SeedSignerEvmOpts} [opts] - Construction options for root reuse, direct child derivation or path definition (default is index 0).
@@ -205,17 +197,7 @@ export default class SeedSignerEvm extends ISignerEvm {
     /** @private */
     this._path = fullPath
     /** @private */
-    this._isRoot = !opts.isChild
-    /** @private */
     this._root = opts.isChild ? undefined : root
-  }
-
-  /**
-   * Whether this signer is a root (master) signer that holds the HD root and can derive children.
-   * @type {boolean}
-   */
-  get isRoot () {
-    return this._isRoot
   }
 
   /**

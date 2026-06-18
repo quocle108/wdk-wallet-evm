@@ -27,6 +27,20 @@ export type UnsignedEvmTransaction = {
     blobVersionedHashes?: string[];
     authorizationList?: AuthorizationLike[];
 };
+export type SeedSignerEvmOpts = {
+    /**
+     * An existing HD node wallet root to derive from (internal; set by {@link SeedSignerEvm#derive}).
+     */
+    root?: object;
+    /**
+     * Relative BIP-44 path segment (e.g. "0'/0/0"). Defaults to the account at index 0.
+     */
+    path?: string;
+    /**
+     * Internal. When true, the signer is a derived child and does not retain the root (set by {@link SeedSignerEvm#derive}).
+     */
+    isChild?: boolean;
+};
 /**
  * Interface for EVM signers, extending the base `ISigner` from `@tetherto/wdk-wallet`.
  *
@@ -34,11 +48,6 @@ export type UnsignedEvmTransaction = {
  * @interface
  */
 export class ISignerEvm extends ISigner {
-    /**
-     * Whether this signer is a root (master) signer that holds the HD root and can derive children.
-     * @type {boolean}
-     */
-    get isRoot(): boolean;
     /**
      * Whether this signer was created from a standalone private key.
      * @type {boolean}
@@ -118,17 +127,11 @@ export default class SeedSignerEvm extends ISignerEvm {
      * Provide a mnemonic/seed (children built via {@link derive} pass a shared root internally).
      *
      * @param {string|Uint8Array|null} seed - BIP-39 mnemonic or seed bytes. Omit when providing `opts.root`.
-     * @param {{root?: object, path?: string, isChild?: boolean}} [opts] - Construction options for root reuse, direct child derivation or path definition (default is index 0).
+     * @param {SeedSignerEvmOpts} [opts] - Construction options for root reuse, direct child derivation or path definition (default is index 0).
      * @throws {Error} If neither a seed nor a root is provided, or if both are provided.
      * @throws {Error} If a seed is provided but is not a valid BIP-39 mnemonic.
      */
-    constructor(seed: string | Uint8Array | null, opts?: {
-        root?: object;
-        path?: string;
-        isChild?: boolean;
-    });
-    /** @private */
-    private _isRoot;
+    constructor(seed: string | Uint8Array | null, opts?: SeedSignerEvmOpts);
     /** @private */
     private _account;
     /** @private */
@@ -136,13 +139,12 @@ export default class SeedSignerEvm extends ISignerEvm {
     /** @private */
     private _path;
     /**
-     * The HD root node, kept only when this signer owns it (created from a seed).
-     * A child derived via `derive` uses its parent's root to derive its own account
-     * but does not retain it, so disposing a child never touches the shared root.
+     * The HD root node, retained only by root signers. A child built via `derive`
+     * uses its parent's root to derive its own account but does not keep it, so disposing
+     * a child only clears the child's own account and never touches the shared root.
      * @private
      */
     private _root;
-    get isRoot(): boolean;
     get isPrivateKey(): boolean;
     get index(): number | undefined;
     get path(): string | undefined;

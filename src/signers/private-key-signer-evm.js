@@ -55,16 +55,8 @@ export default class PrivateKeySignerEvm extends ISignerEvm {
     /** @private */
     this._address = this._wallet.address
     /** @private */
-    this._isRoot = false
-    /** @private */
     this._path = undefined
   }
-
-  /**
-   * Whether this signer is a root (master) signer. Always false for private key signers.
-   * @type {boolean}
-   */
-  get isRoot () { return this._isRoot }
 
   /**
    * Whether this signer was created from a standalone private key.
@@ -73,10 +65,11 @@ export default class PrivateKeySignerEvm extends ISignerEvm {
   get isPrivateKey () { return true }
 
   /**
-   * The account index. Always 0 for private key signers.
-   * @type {number}
+   * The account index. Always undefined for private key signers: a raw key has no
+   * BIP-44 position, so reporting an index would be misleading.
+   * @type {number|undefined}
    */
-  get index () { return 0 }
+  get index () { return undefined }
 
   /**
    * The derivation path. Always undefined for private key signers.

@@ -22,15 +22,11 @@ export default class PrivateKeySignerEvm extends ISignerEvm {
     /** @private */
     private _address;
     /** @private */
-    private _isRoot;
-    /** @private */
     private _path;
     /** @type {boolean} */
-    get isRoot(): boolean;
-    /** @type {boolean} */
     get isPrivateKey(): boolean;
-    /** @type {number} */
-    get index(): number;
+    /** @type {number|undefined} */
+    get index(): number | undefined;
     /** @type {string|undefined} */
     get path(): string | undefined;
     /** @type {string} */

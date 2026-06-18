@@ -34,8 +34,6 @@ export default class LedgerSignerEvm extends ISignerEvm {
     /** @private */
     private _dmk;
     /** @type {boolean} */
-    get isRoot(): boolean;
-    /** @type {boolean} */
     get isPrivateKey(): boolean;
     /** @type {number|undefined} */
     get index(): number | undefined;

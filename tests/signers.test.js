@@ -35,10 +35,9 @@ describe('SeedSignerEvm', () => {
     root.dispose()
   })
 
-  test('should create a root signer with the account at index 0 by default', () => {
+  test('should create a signer with the account at index 0 by default', () => {
     const signer = new SeedSignerEvm(VALID_SEED_PHRASE)
 
-    expect(signer.isRoot).toBe(true)
     expect(signer.isPrivateKey).toBe(false)
     expect(signer.address).toBe(EXPECTED_ADDRESS)
     expect(signer.path).toBe("m/44'/60'/0'/0/0")
@@ -51,7 +50,6 @@ describe('SeedSignerEvm', () => {
     const root = new SeedSignerEvm(VALID_SEED_PHRASE)
     const child = root.derive("0'/0/0")
 
-    expect(child.isRoot).toBe(false)
     expect(child.address).toBe(EXPECTED_ADDRESS)
     expect(child.path).toBe("m/44'/60'/0'/0/0")
     expect(child.index).toBe(0)
@@ -75,7 +73,6 @@ describe('SeedSignerEvm', () => {
   test('should derive the same address when path is provided via constructor opts', () => {
     const signer = new SeedSignerEvm(VALID_SEED_PHRASE, { path: "0'/0/0" })
 
-    expect(signer.isRoot).toBe(true)
     expect(signer.address).toBe(EXPECTED_ADDRESS)
 
     signer.dispose()
@@ -148,9 +145,8 @@ describe('PrivateKeySignerEvm', () => {
     const signer = new PrivateKeySignerEvm(VALID_PRIVATE_KEY)
 
     expect(signer.address).toBe(EXPECTED_ADDRESS)
-    expect(signer.isRoot).toBe(false)
     expect(signer.isPrivateKey).toBe(true)
-    expect(signer.index).toBe(0)
+    expect(signer.index).toBeUndefined()
 
     signer.dispose()
   })

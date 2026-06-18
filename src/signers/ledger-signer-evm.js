@@ -75,15 +75,6 @@ export default class LedgerSignerEvm extends ISignerEvm {
   }
 
   /**
-   * Whether this signer is a root (master) signer. Always false: a Ledger signer is
-   * always bound to a concrete derivation path.
-   * @type {boolean}
-   */
-  get isRoot () {
-    return false
-  }
-
-  /**
    * Whether this signer was created from a standalone private key. Always false for Ledger signers.
    * @type {boolean}
    */
