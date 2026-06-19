@@ -160,10 +160,21 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
   /**
    * Signs a transaction.
    *
+   * If a provider is set, it also estimates the transaction's costs and checks them against the transaction max. fee option.
+   *
    * @param {EvmTransaction} tx - The transaction to sign.
    * @returns {Promise<string>} The signed transaction as a hex string.
+   * @throws {Error} If a provider is set, and the transaction's cost surpasses the transaction max. fee option.
    */
   async signTransaction (tx) {
+    
+    if (this._provider && this._config.transactionMaxFee !== undefined) {
+      const { fee } = await this.quoteSendTransaction(tx)
+
+      if (fee > this._config.transactionMaxFee) {
+        throw new Error('Exceeded maximum fee cost for transaction operation.')
+      }
+    }
     return await this._signer.signTransaction({
       from: await this.getAddress(),
       ...tx
@@ -175,12 +186,16 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    *
    * @param {EvmTransaction} tx - The transaction.
    * @returns {Promise<TransactionResult>} The transaction's result.
+   * @throws {Error} If the transaction's cost exceeds the maximum transaction fee option.
    */
   async sendTransaction (tx) {
     if (!this._provider) {
       throw new Error('The wallet must be connected to a provider to send transactions.')
     }
     const { fee } = await this.quoteSendTransaction(tx)
+    if (this._config.transactionMaxFee !== undefined && fee > this._config.transactionMaxFee) {
+      throw new Error('Exceeded maximum fee cost for transaction operation.')
+    }
     // Build, sign and broadcast raw transaction using the signer
     const from = await this.getAddress()
     const unsignedTx = await populateTransactionEvm(this._provider, from, tx)
@@ -194,6 +209,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    *
    * @param {EvmTransferOptions} options - The transfer's options.
    * @returns {Promise<TransferResult>} The transfer's result.
+   * @throws {Error} If the transfer's cost exceeds the maximum transfer fee option.
    */
   async transfer (options) {
     if (!this._provider) {
@@ -204,7 +220,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
 
     const { fee } = await this.quoteSendTransaction(tx)
 
-    if (this._config.transferMaxFee !== undefined && fee >= this._config.transferMaxFee) {
+    if (this._config.transferMaxFee !== undefined && fee > this._config.transferMaxFee) {
       throw new Error('Exceeded maximum fee cost for transfer operation.')
     }
 
