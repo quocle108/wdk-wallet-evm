@@ -134,8 +134,8 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
   }
 
   /**
-   * Returns the account's address. If not set at construction time (e.g. lazy hardware signers),
-   * it asks the underlying signer to resolve it, then caches it locally.
+   * Returns the account's address. If it wasn't resolved at construction time (e.g hardware signers), it asks the
+   * underlying signer to resolve it, then caches it locally.
    *
    * @returns {Promise<string>} The account's address.
    */
