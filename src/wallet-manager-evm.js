@@ -21,10 +21,13 @@ import { BrowserProvider, JsonRpcProvider } from 'ethers'
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
 import WalletAccountEvm from './wallet-account-evm.js'
+import SeedSignerEvm from './signers/seed-signer-evm.js'
 
+/** @typedef {import('./signers/seed-signer-evm.js').ISignerEvm} ISignerEvm */
 /** @typedef {import('ethers').Provider} Provider */
 
 /** @typedef {import("@tetherto/wdk-wallet").FeeRates} FeeRates */
+/** @typedef {import("@tetherto/wdk-wallet").SignerError} SignerError */
 
 /** @typedef {import('./wallet-account-evm.js').EvmWalletConfig} EvmWalletConfig */
 
@@ -48,11 +51,23 @@ export default class WalletManagerEvm extends WalletManager {
   /**
    * Creates a new wallet manager for evm blockchains.
    *
-   * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
+   * Accepts either a BIP-39 seed (string/Uint8Array) for backwards compatibility, or a
+   * pre-built root signer object. The default signer must be derivable (it must be able to
+   * derive child accounts); non-derivable signers (e.g. private-key signers) are not allowed
+   * as the default but may be registered by name via {@link addSigner} - If not adding to your global account managment for using just one non derivable signer create a standalone account.
+   *
+   * @param {string|Uint8Array|ISignerEvm} seedOrSigner - A BIP-39 seed phrase, seed bytes, or a root signer.
    * @param {EvmWalletConfig} [config] - The configuration object.
    */
-  constructor (seed, config = {}) {
-    super(seed, config)
+  constructor (seedOrSigner, config = {}) {
+    let signer = seedOrSigner
+    if (typeof seedOrSigner === 'string' || seedOrSigner instanceof Uint8Array) {
+      signer = new SeedSignerEvm(seedOrSigner)
+    }
+    if (!signer.isDerivable) {
+      throw new Error('The default signer must be derivable. Non-derivable signers (e.g. private-key signers) can only be registered by name via addSigner.')
+    }
+    super(signer, config)
 
     /**
      * The evm wallet configuration.
@@ -94,35 +109,68 @@ export default class WalletManagerEvm extends WalletManager {
   }
 
   /**
-   * Returns the wallet account at a specific index (see [BIP-44](https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki)).
+   * Returns the wallet account at a specific index.
    *
-   * @example
-   * // Returns the account with derivation path m/44'/60'/0'/0/1
-   * const account = await wallet.getAccount(1);
+   * @overload
    * @param {number} [index] - The index of the account to get (default: 0).
+   * @param {Object} [options] - Account options.
+   * @param {string} [options.signerName] - The signer name. Omit to use the default signer.
    * @returns {Promise<WalletAccountEvm>} The account.
+   * @throws {Error} If a signer name is given but no signer exists with that name.
+   * @throws {SignerError} If the signer doesn't support account derivation.
    */
-  async getAccount (index = 0) {
-    return await this.getAccountByPath(`0'/0/${index}`)
+
+  /**
+   * Returns the wallet account associated with a registered signer. Non-derivable
+   * signers (e.g. private-key signers) return the signer's single account; derivable signers
+   * derive a detached child at the signer's own account (the root is never handed out).
+   *
+   * @overload
+   * @param {string} signerName - The signer name registered via {@link addSigner}.
+   * @returns {Promise<WalletAccountEvm>} The account.
+   * @throws {Error} If no signer exists with the given name.
+   */
+
+  async getAccount (indexOrSignerName = 0, options = {}) {
+    if (typeof indexOrSignerName === 'string') {
+      const key = `${indexOrSignerName}#self`
+      if (this._accounts[key]) {
+        return this._accounts[key]
+      }
+      const signer = this.getSigner(indexOrSignerName)
+      const accountSigner = signer.isDerivable
+        ? await signer.derive(signer.path.split('/').slice(-3).join('/'))
+        : signer
+      const account = new WalletAccountEvm(accountSigner, this._config)
+      this._accounts[key] = account
+      return account
+    }
+
+    const { signerName } = options
+    return await this.getAccountByPath(`0'/0/${indexOrSignerName}`, { signerName })
   }
 
   /**
-   * Returns the wallet account at a specific BIP-44 derivation path.
+   * Returns the wallet account at a specific derivation path.
    *
-   * @example
-   * // Returns the account with derivation path m/44'/60'/0'/0/1
-   * const account = await wallet.getAccountByPath("0'/0/1");
    * @param {string} path - The derivation path (e.g. "0'/0/0").
+   * @param {Object} [options] - Account options.
+   * @param {string} [options.signerName] - The signer name. Omit to use the default signer.
    * @returns {Promise<WalletAccountEvm>} The account.
+   * @throws {Error} If a signer name is given but no signer exists with that name.
+   * @throws {SignerError} If the signer doesn't support account derivation.
    */
-  async getAccountByPath (path) {
-    if (!this._accounts[path]) {
-      const account = new WalletAccountEvm(this.seed, path, this._config)
-
-      this._accounts[path] = account
+  async getAccountByPath (path, options = {}) {
+    const { signerName } = options
+    const key = `${signerName ?? ''}:${path}`
+    if (this._accounts[key]) {
+      return this._accounts[key]
     }
-
-    return this._accounts[path]
+    const signer = this.getSigner(signerName)
+    const childSigner = await signer.derive(path)
+    const account = new WalletAccountEvm(childSigner, this._config)
+    this._accounts[key] = account
+    return account
   }
 
   /**

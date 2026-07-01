@@ -17,3 +17,4 @@ export type EvmTransaction = import("./src/wallet-account-read-only-evm.js").Evm
 export type EvmTransferOptions = import("./src/wallet-account-read-only-evm.js").EvmTransferOptions;
 export type EvmWalletConfig = import("./src/wallet-account-read-only-evm.js").EvmWalletConfig;
 export type ApproveOptions = import("./src/wallet-account-evm.js").ApproveOptions;
+export type UnsignedEvmTransaction = import("./src/utils/tx-populator-evm.js").UnsignedEvmTransaction;

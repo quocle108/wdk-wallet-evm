@@ -47,7 +47,7 @@ import FailoverProvider from '@tetherto/wdk-failover-provider'
 
 /**
  * @typedef {Object} EvmTransaction
- * @property {string} to - The transaction's recipient.
+ * @property {string | null} [to] - The transaction's recipient. Omit or pass null to deploy a contract.
  * @property {number | bigint} value - The amount of ethers to send to the recipient (in weis).
  * @property {string} [data] - The transaction's data in hex format.
  * @property {number | bigint} [gasLimit] - The maximum amount of gas this transaction is permitted to use.

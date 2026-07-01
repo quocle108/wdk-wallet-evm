@@ -33,6 +33,8 @@
 
 /** @typedef {import('./src/wallet-account-evm.js').ApproveOptions} ApproveOptions */
 
+/** @typedef {import('./src/utils/tx-populator-evm.js').UnsignedEvmTransaction} UnsignedEvmTransaction */
+
 export { default } from './src/wallet-manager-evm.js'
 
 export { default as WalletAccountReadOnlyEvm } from './src/wallet-account-read-only-evm.js'

@@ -141,9 +141,9 @@ export type DelegationInfo = {
 };
 export type EvmTransaction = {
     /**
-     * - The transaction's recipient.
+     * - The transaction's recipient. Omit or pass null to deploy a contract.
      */
-    to: string;
+    to?: string | null;
     /**
      * - The amount of ethers to send to the recipient (in weis).
      */

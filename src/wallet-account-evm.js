@@ -16,12 +16,13 @@
 
 import { Contract, ZeroAddress } from 'ethers'
 
-import * as bip39 from 'bip39'
-
 import WalletAccountReadOnlyEvm from './wallet-account-read-only-evm.js'
 
-import MemorySafeHDNodeWallet from './memory-safe/hd-node-wallet.js'
+import SeedSignerEvm from './signers/seed-signer-evm.js'
+import PrivateKeySignerEvm from './signers/private-key-signer-evm.js'
+import { populateTransactionEvm } from './utils/tx-populator-evm.js'
 
+/** @typedef {import('./signers/seed-signer-evm.js').ISignerEvm} ISignerEvm */
 /** @typedef {import('ethers').HDNodeWallet} HDNodeWallet */
 /** @typedef {import('ethers').AuthorizationRequest} AuthorizationRequest */
 /** @typedef {import('ethers').Authorization} Authorization */
@@ -45,8 +46,6 @@ import MemorySafeHDNodeWallet from './memory-safe/hd-node-wallet.js'
  * @property {number | bigint} amount - The amount of tokens to approve to the spender.
  */
 
-const BIP_44_ETH_DERIVATION_PATH_PREFIX = "m/44'/60'"
-
 const USDT_MAINNET_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
 
 const DELEGATION_TX_GAS_LIMIT = 100_000
@@ -54,27 +53,13 @@ const DELEGATION_TX_GAS_LIMIT = 100_000
 /** @implements {IWalletAccount} */
 export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
   /**
-   * Creates a new evm wallet account.
+   * Creates a new evm wallet account using a signer.
    *
-   * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
-   * @param {string} path - The BIP-44 derivation path (e.g. "0'/0/0").
+   * @param {ISignerEvm} signer - A signer implementing the EVM signer interface.
    * @param {EvmWalletConfig} [config] - The configuration object.
    */
-  constructor (seed, path, config = {}) {
-    if (typeof seed === 'string') {
-      if (!bip39.validateMnemonic(seed)) {
-        throw new Error('The seed phrase is invalid.')
-      }
-
-      seed = bip39.mnemonicToSeedSync(seed)
-    }
-
-    path = BIP_44_ETH_DERIVATION_PATH_PREFIX + '/' + path
-
-    const account = MemorySafeHDNodeWallet.fromSeed(seed)
-      .derivePath(path)
-
-    super(account.address, config)
+  constructor (signer, config = {}) {
+    super(signer.address, config)
 
     /**
      * The wallet account configuration.
@@ -84,17 +69,8 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
      */
     this._config = config
 
-    /**
-     * The account.
-     *
-     * @protected
-     * @type {HDNodeWallet}
-     */
-    this._account = account
-
-    if (this._provider) {
-      this._account = this._account.connect(this._provider)
-    }
+    /** @private */
+    this._signer = signer
   }
 
   /**
@@ -103,7 +79,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @type {number}
    */
   get index () {
-    return this._account.index
+    return this._signer.index
   }
 
   /**
@@ -112,7 +88,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @type {string}
    */
   get path () {
-    return this._account.path
+    return this._signer.path
   }
 
   /**
@@ -125,10 +101,49 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @type {KeyPair}
    */
   get keyPair () {
-    return {
-      privateKey: this._account.privateKeyBuffer ?? null,
-      publicKey: this._account.publicKeyBuffer
-    }
+    return this._signer.keyPair
+  }
+
+  /**
+   * Legacy helper to create an account from seed + path.
+   * Creates a root signer from the seed and derives a child for the given path.
+   *
+   * @param {string | Uint8Array} seed - The wallet's BIP-39 seed phrase or seed bytes.
+   * @param {string} path - The BIP-44 derivation path (e.g. "0'/0/0").
+   * @param {EvmWalletConfig} [config] - The configuration object.
+   * @returns {Promise<WalletAccountEvm>}
+   */
+  static async fromSeed (seed, path, config = {}) {
+    const root = new SeedSignerEvm(seed)
+    const signer = await root.derive(path)
+    // The derived child holds its own account key and does not retain the root
+    root.dispose()
+    return new WalletAccountEvm(signer, config)
+  }
+
+  /**
+   * Creates a new evm wallet account from a raw private key.
+   *
+   * @param {string | Uint8Array} privateKey - The raw private key (hex string with or without 0x, or 32 bytes).
+   * @param {EvmWalletConfig} [config] - The configuration object.
+   * @returns {WalletAccountEvm} The wallet account.
+   */
+  static fromPrivateKey (privateKey, config = {}) {
+    const signer = new PrivateKeySignerEvm(privateKey)
+    return new WalletAccountEvm(signer, config)
+  }
+
+  /**
+   * Returns the account's address. If it wasn't resolved at construction time (e.g hardware signers), it asks the
+   * underlying signer to resolve it, then caches it locally.
+   *
+   * @returns {Promise<string>} The account's address.
+   */
+  async getAddress () {
+    if (this._address) return this._address
+    const addr = await this._signer.getAddress()
+    this.__address = addr
+    return addr
   }
 
   /**
@@ -138,7 +153,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @returns {Promise<string>} The message's signature.
    */
   async sign (message) {
-    return await this._account.signMessage(message)
+    return await this._signer.sign(message)
   }
 
   /**
@@ -148,7 +163,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @returns {Promise<string>} The typed data signature.
    */
   async signTypedData ({ domain, types, message }) {
-    return await this._account.signTypedData(domain, types, message)
+    return await this._signer.signTypedData({ domain, types, message })
   }
 
   /**
@@ -161,15 +176,14 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @throws {Error} If a provider is set, and the transaction's cost surpasses the transaction max. fee option.
    */
   async signTransaction (tx) {
-    if (this._account.provider && this._config.transactionMaxFee !== undefined) {
+    if (this._provider && this._config.transactionMaxFee !== undefined) {
       const { fee } = await this.quoteSendTransaction(tx)
 
       if (fee > this._config.transactionMaxFee) {
         throw new Error('Exceeded maximum fee cost for transaction operation.')
       }
     }
-
-    return await this._account.signTransaction({
+    return await this._signer.signTransaction({
       from: await this.getAddress(),
       ...tx
     })
@@ -183,21 +197,18 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @throws {Error} If the transaction's cost exceeds the maximum transaction fee option.
    */
   async sendTransaction (tx) {
-    if (!this._account.provider) {
+    if (!this._provider) {
       throw new Error('The wallet must be connected to a provider to send transactions.')
     }
-
     const { fee } = await this.quoteSendTransaction(tx)
-
     if (this._config.transactionMaxFee !== undefined && fee > this._config.transactionMaxFee) {
       throw new Error('Exceeded maximum fee cost for transaction operation.')
     }
-
-    const { hash } = await this._account.sendTransaction({
-      from: await this.getAddress(),
-      ...tx
-    })
-
+    // Build, sign and broadcast raw transaction using the signer
+    const from = await this.getAddress()
+    const unsignedTx = await populateTransactionEvm(this._provider, from, tx)
+    const signed = await this._signer.signTransaction(unsignedTx)
+    const hash = await this._provider.send('eth_sendRawTransaction', [signed])
     return { hash, fee }
   }
 
@@ -209,7 +220,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @throws {Error} If the transfer's cost exceeds the maximum transfer fee option.
    */
   async transfer (options) {
-    if (!this._account.provider) {
+    if (!this._provider) {
       throw new Error('The wallet must be connected to a provider to transfer tokens.')
     }
 
@@ -221,7 +232,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
       throw new Error('Exceeded maximum fee cost for transfer operation.')
     }
 
-    const { hash } = await this._account.sendTransaction(tx)
+    const { hash } = await this.sendTransaction(tx)
 
     return { hash, fee }
   }
@@ -234,7 +245,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @throws {Error} If trying to approve usdts on ethereum with allowance not equal to zero (due to the usdt allowance reset requirement).
    */
   async approve (options) {
-    if (!this._account.provider) {
+    if (!this._provider) {
       throw new Error('The wallet must be connected to a provider to approve funds.')
     }
 
@@ -269,7 +280,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    */
   async toReadOnlyAccount () {
     if (!this._evmReadOnlyAccount) {
-      this._evmReadOnlyAccount = new WalletAccountReadOnlyEvm(this._account.address, this._config)
+      this._evmReadOnlyAccount = new WalletAccountReadOnlyEvm(await this.getAddress(), this._config)
     }
 
     return this._evmReadOnlyAccount
@@ -282,7 +293,18 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @returns {Promise<Authorization>} The signed authorization.
    */
   async signAuthorization (auth) {
-    return await this._account.authorize(auth)
+    const populated = { ...auth }
+    if (this._provider) {
+      if (populated.chainId == null) {
+        const { chainId } = await this._provider.getNetwork()
+        populated.chainId = chainId
+      }
+      if (populated.nonce == null) {
+        const address = await this.getAddress()
+        populated.nonce = await this._provider.getTransactionCount(address)
+      }
+    }
+    return await this._signer.signAuthorization(populated)
   }
 
   /**
@@ -296,7 +318,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * @returns {Promise<TransactionResult>} The transaction result.
    */
   async delegate (delegateAddress) {
-    if (!this._account.provider) {
+    if (!this._provider) {
       throw new Error('The wallet must be connected to a provider to delegate.')
     }
 
@@ -332,6 +354,6 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    * Disposes the wallet account, erasing the private key from the memory.
    */
   dispose () {
-    this._account.dispose()
+    this._signer.dispose()
   }
 }
