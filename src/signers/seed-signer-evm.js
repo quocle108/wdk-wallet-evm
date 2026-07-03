@@ -190,6 +190,8 @@ export default class SeedSignerEvm extends ISignerEvm {
     const fullPath = `${BIP_44_ETH_DERIVATION_PATH_PREFIX}/${opts.path || DEFAULT_ACCOUNT_PATH}`
     const account = root.derivePath(fullPath)
 
+    if (opts.isChild && !opts.root) root.dispose()
+
     /** @private */
     this._account = account
     /** @private */

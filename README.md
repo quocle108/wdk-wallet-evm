@@ -90,6 +90,17 @@ const pkAccount = new WalletAccountEvm(pkSigner, {
 })
 ```
 
+### Single Account (no manager): Seed + path
+
+```javascript
+import { WalletAccountEvm } from '@tetherto/wdk-wallet-evm'
+
+// From a BIP-39 seed phrase (or seed bytes) and a BIP-44 derivation path
+const account = new WalletAccountEvm(mnemonic, "0'/0/0", {
+  provider: 'https://eth-mainnet.g.alchemy.com/v2/your-api-key',
+})
+```
+
 ### Managing Multiple Accounts (seed-based manager)
 
 ```javascript

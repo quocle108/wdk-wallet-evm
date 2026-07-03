@@ -4,6 +4,8 @@ import { ContractFactory, Contract } from 'ethers'
 
 import { afterEach, beforeEach, describe, expect, test, jest } from '@jest/globals'
 
+import * as bip39 from 'bip39'
+
 import { WalletAccountEvm, WalletAccountReadOnlyEvm } from '../index.js'
 import SeedSignerEvm from '../src/signers/seed-signer-evm.js'
 import PrivateKeySignerEvm from '../src/signers/private-key-signer-evm.js'
@@ -17,6 +19,10 @@ const USDT_MAINNET_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
 const DELEGATE_CONTRACT_ADDRESS = '0xbe08d4d81ebea77f6aa54b2067ea5f56005f98de'
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
+
+const INVALID_SEED_PHRASE = 'invalid seed phrase'
+
+const SEED = bip39.mnemonicToSeedSync(SEED_PHRASE)
 
 const ACCOUNT = {
   index: 0,
@@ -90,19 +96,47 @@ describe('WalletAccountEvm', () => {
     await hre.network.provider.send('hardhat_reset')
   })
 
-  describe('fromSeed', () => {
-    test('should create the account at the given path from a seed phrase', async () => {
-      const seededAccount = await WalletAccountEvm.fromSeed(SEED_PHRASE, "0'/0/0", {
-        provider: hre.network.provider
-      })
+  describe('constructor (seed overload)', () => {
+    test('should successfully initialize an account for the given seed phrase and path', async () => {
+      const account = new WalletAccountEvm(SEED_PHRASE, "0'/0/0")
 
-      expect(await seededAccount.getAddress()).toBe(ACCOUNT.address)
-      expect(seededAccount.path).toBe(ACCOUNT.path)
-      expect(seededAccount.index).toBe(ACCOUNT.index)
+      expect(account.index).toBe(ACCOUNT.index)
+
+      expect(account.path).toBe(ACCOUNT.path)
+
+      expect(account.keyPair).toEqual({
+        privateKey: new Uint8Array(Buffer.from(ACCOUNT.keyPair.privateKey, 'hex')),
+        publicKey: new Uint8Array(Buffer.from(ACCOUNT.keyPair.publicKey, 'hex'))
+      })
+    })
+
+    test('should successfully initialize an account for the given seed and path', async () => {
+      const account = new WalletAccountEvm(SEED, "0'/0/0")
+
+      expect(account.index).toBe(ACCOUNT.index)
+
+      expect(account.path).toBe(ACCOUNT.path)
+
+      expect(account.keyPair).toEqual({
+        privateKey: new Uint8Array(Buffer.from(ACCOUNT.keyPair.privateKey, 'hex')),
+        publicKey: new Uint8Array(Buffer.from(ACCOUNT.keyPair.publicKey, 'hex'))
+      })
+    })
+
+    test('should throw if the seed phrase is invalid', () => {
+      // eslint-disable-next-line no-new
+      expect(() => { new WalletAccountEvm(INVALID_SEED_PHRASE, "0'/0/0") })
+        .toThrow('The seed phrase is invalid.')
+    })
+
+    test('should throw if the path is invalid', () => {
+      // eslint-disable-next-line no-new
+      expect(() => { new WalletAccountEvm(SEED_PHRASE, "a'/b/c") })
+        .toThrow('invalid path component')
     })
 
     test('should derive the same account as a manually derived signer', async () => {
-      const seededAccount = await WalletAccountEvm.fromSeed(SEED_PHRASE, "0'/0/0")
+      const seededAccount = new WalletAccountEvm(SEED_PHRASE, "0'/0/0")
       const signerAccount = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"))
 
       expect(await seededAccount.getAddress()).toBe(await signerAccount.getAddress())

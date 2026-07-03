@@ -53,13 +53,29 @@ const DELEGATION_TX_GAS_LIMIT = 100_000
 /** @implements {IWalletAccount} */
 export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
   /**
+   * Creates a new evm wallet account from a BIP-39 seed, deriving the account's key at the
+   * given BIP-44 path.
+   *
+   * @overload
+   * @param {string | Uint8Array} seed - The wallet's BIP-39 seed phrase or seed bytes.
+   * @param {string} path - The BIP-44 derivation path (e.g. "0'/0/0").
+   * @param {EvmWalletConfig} [config] - The configuration object.
+   */
+
+  /**
    * Creates a new evm wallet account using a signer.
    *
+   * @overload
    * @param {ISignerEvm} signer - A signer implementing the EVM signer interface.
    * @param {EvmWalletConfig} [config] - The configuration object.
    */
-  constructor (signer, config = {}) {
-    super(signer.address, config)
+
+  constructor (seedOrSigner, pathOrConfig = {}, config = {}) {
+    const [signer, configuration] = typeof seedOrSigner === 'string' || seedOrSigner instanceof Uint8Array
+      ? [new SeedSignerEvm(seedOrSigner, { path: pathOrConfig, isChild: true }), config]
+      : [seedOrSigner, pathOrConfig]
+
+    super(signer.address, configuration)
 
     /**
      * The wallet account configuration.
@@ -67,7 +83,7 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
      * @protected
      * @type {EvmWalletConfig}
      */
-    this._config = config
+    this._config = configuration
 
     /** @private */
     this._signer = signer
@@ -102,23 +118,6 @@ export default class WalletAccountEvm extends WalletAccountReadOnlyEvm {
    */
   get keyPair () {
     return this._signer.keyPair
-  }
-
-  /**
-   * Legacy helper to create an account from seed + path.
-   * Creates a root signer from the seed and derives a child for the given path.
-   *
-   * @param {string | Uint8Array} seed - The wallet's BIP-39 seed phrase or seed bytes.
-   * @param {string} path - The BIP-44 derivation path (e.g. "0'/0/0").
-   * @param {EvmWalletConfig} [config] - The configuration object.
-   * @returns {Promise<WalletAccountEvm>}
-   */
-  static async fromSeed (seed, path, config = {}) {
-    const root = new SeedSignerEvm(seed)
-    const signer = await root.derive(path)
-    // The derived child holds its own account key and does not retain the root
-    root.dispose()
-    return new WalletAccountEvm(signer, config)
   }
 
   /**
