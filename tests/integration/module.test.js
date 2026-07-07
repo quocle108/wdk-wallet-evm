@@ -1,13 +1,23 @@
-import hre from 'hardhat'
+import { ContractFactory, HDNodeWallet, JsonRpcProvider, Mnemonic } from 'ethers'
 
-import { ContractFactory } from 'ethers'
-
-import { describe, expect, test, beforeEach, afterEach } from '@jest/globals'
+import { describe, expect, test, beforeEach, afterEach, afterAll } from '@jest/globals'
 
 import WalletManagerEvm from '../../index.js'
 import SeedSignerEvm from '../../src/signers/seed-signer-evm.js'
 
 import TestToken from './../artifacts/TestToken.json' with { type: 'json' }
+
+const RPC_URL = 'http://127.0.0.1:8545'
+
+const NODE_MNEMONIC = 'anger burst story spy face pattern whale quit delay fiction ball solve'
+
+// cacheTimeout -1: ethers' default 250ms read cache returns stale nonces under automining
+const provider = new JsonRpcProvider(RPC_URL, undefined, { cacheTimeout: -1 })
+provider.pollingInterval = 50
+
+const nodeSigner = HDNodeWallet
+  .fromMnemonic(Mnemonic.fromPhrase(NODE_MNEMONIC), "m/44'/60'/0'/0/0")
+  .connect(provider)
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
 
@@ -35,9 +45,7 @@ const INITIAL_BALANCE = 1_000_000_000_000_000_000n
 const INITIAL_TOKEN_BALANCE = 1_000_000n
 
 async function deployTestToken () {
-  const [signer] = await hre.ethers.getSigners()
-
-  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, signer)
+  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, nodeSigner)
   const contract = await factory.deploy()
   const transaction = await contract.deploymentTransaction()
 
@@ -48,11 +56,11 @@ async function deployTestToken () {
 
 describe('@tetherto/wdk-wallet-evm', () => {
   let testToken,
-    wallet
+    wallet,
+    snapshotId
 
   async function sendEthersTo (to, value) {
-    const [signer] = await hre.ethers.getSigners()
-    const transaction = await signer.sendTransaction({ to, value })
+    const transaction = await nodeSigner.sendTransaction({ to, value })
     await transaction.wait()
   }
 
@@ -62,6 +70,8 @@ describe('@tetherto/wdk-wallet-evm', () => {
   }
 
   beforeEach(async () => {
+    snapshotId = await provider.send('evm_snapshot', [])
+
     testToken = await deployTestToken()
 
     for (const account of [ACCOUNT_0, ACCOUNT_1]) {
@@ -70,12 +80,16 @@ describe('@tetherto/wdk-wallet-evm', () => {
       await sendTestTokensTo(account.address, INITIAL_TOKEN_BALANCE)
     }
 
-    wallet = new WalletManagerEvm(new SeedSignerEvm(SEED_PHRASE), { provider: hre.network.provider })
+    wallet = new WalletManagerEvm(new SeedSignerEvm(SEED_PHRASE), { provider: RPC_URL })
   })
 
   afterEach(async () => {
     wallet.dispose()
-    await hre.network.provider.send('hardhat_reset')
+    await provider.send('evm_revert', [snapshotId])
+  })
+
+  afterAll(() => {
+    provider.destroy()
   })
 
   test('should derive an account, quote the cost of a tx and send the tx', async () => {
@@ -86,7 +100,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
       value: 1_000
     }
 
-    const EXPECTED_FEE = 42_921_547_517_892n
+    const EXPECTED_FEE = 42_732_792_840_002n
 
     const { fee: feeEstimate } = await account.quoteSendTransaction(TRANSACTION)
 
@@ -94,7 +108,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const { hash, fee } = await account.sendTransaction(TRANSACTION)
 
-    const transaction = await hre.ethers.provider.getTransaction(hash)
+    const transaction = await provider.getTransaction(hash)
 
     expect(transaction.hash).toBe(hash)
     expect(transaction.to).toBe(TRANSACTION.to)
@@ -115,7 +129,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const { hash } = await account0.sendTransaction(TRANSACTION)
 
-    const { fee } = await hre.ethers.provider.getTransactionReceipt(hash)
+    const { fee } = await provider.getTransactionReceipt(hash)
 
     const balanceAccount0 = await account0.getBalance()
     const balanceAccount1 = await account1.getBalance()
@@ -133,14 +147,14 @@ describe('@tetherto/wdk-wallet-evm', () => {
       amount: 100
     }
 
-    const EXPECTED_FEE = 106_538_470_978_176n
+    const EXPECTED_FEE = 106_069_950_248_256n
 
     const { fee: feeEstimate } = await account.quoteTransfer(TRANSFER)
 
     expect(feeEstimate).toBe(EXPECTED_FEE)
 
     const { hash, fee } = await account.transfer(TRANSFER)
-    const transaction = await hre.ethers.provider.getTransaction(hash)
+    const transaction = await provider.getTransaction(hash)
     const data = testToken.interface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
 
     expect(transaction.hash).toBe(hash)
@@ -164,7 +178,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const { hash } = await account0.transfer(TRANSFER)
 
-    const { fee } = await hre.ethers.provider.getTransactionReceipt(hash)
+    const { fee } = await provider.getTransactionReceipt(hash)
 
     const balanceAccount0 = await account0.getBalance()
 
@@ -193,7 +207,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const { hash: approveHash } = await account0.sendTransaction(TRANSACTION_APPROVE)
 
-    const { fee: approveFee } = await hre.ethers.provider.getTransactionReceipt(approveHash)
+    const { fee: approveFee } = await provider.getTransactionReceipt(approveHash)
 
     const TRANSACTION_TRANSFER_FROM = {
       from: await account1.getAddress(),
@@ -208,7 +222,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const { hash: transferFromHash } = await account1.sendTransaction(TRANSACTION_TRANSFER_FROM)
 
-    const { fee: transferFromFee } = await hre.ethers.provider.getTransactionReceipt(transferFromHash)
+    const { fee: transferFromFee } = await provider.getTransactionReceipt(transferFromHash)
 
     const balanceAccount0 = await account0.getBalance()
     const balanceAccount1 = await account1.getBalance()
@@ -294,7 +308,7 @@ describe('@tetherto/wdk-wallet-evm', () => {
   })
 
   test('should create a wallet with a low transfer max fee, derive an account, try to transfer some tokens and gracefully fail', async () => {
-    const wallet = new WalletManagerEvm(new SeedSignerEvm(SEED_PHRASE), { provider: hre.network.provider, transferMaxFee: 0 })
+    const wallet = new WalletManagerEvm(new SeedSignerEvm(SEED_PHRASE), { provider: RPC_URL, transferMaxFee: 0 })
 
     const account = await wallet.getAccount(0)
 
@@ -312,8 +326,8 @@ describe('@tetherto/wdk-wallet-evm', () => {
     const account = await wallet.getAccount(0)
 
     const address = await account.getAddress()
-    const nonce = await hre.ethers.provider.getTransactionCount(address)
-    const { chainId } = await hre.ethers.provider.getNetwork()
+    const nonce = await provider.getTransactionCount(address)
+    const { chainId } = await provider.getNetwork()
 
     const TRANSACTION = {
       to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
@@ -327,12 +341,12 @@ describe('@tetherto/wdk-wallet-evm', () => {
 
     const signedTx = await account.signTransaction(TRANSACTION)
 
-    const txResponse = await hre.ethers.provider.broadcastTransaction(signedTx)
+    const txResponse = await provider.broadcastTransaction(signedTx)
     await txResponse.wait()
 
-    const { fee } = await hre.ethers.provider.getTransactionReceipt(txResponse.hash)
+    const { fee } = await provider.getTransactionReceipt(txResponse.hash)
 
-    const transaction = await hre.ethers.provider.getTransaction(txResponse.hash)
+    const transaction = await provider.getTransaction(txResponse.hash)
 
     expect(transaction.to).toBe(TRANSACTION.to)
     expect(transaction.value).toBe(TRANSACTION.value)

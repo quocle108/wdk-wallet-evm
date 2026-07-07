@@ -1,9 +1,8 @@
-require('@nomicfoundation/hardhat-ethers')
-
 /** @type {import('hardhat/config').HardhatUserConfig} */
-module.exports = {
+export default {
   networks: {
     hardhat: {
+      type: 'edr-simulated',
       chainId: 1,
       hardfork: 'prague',
       accounts: {

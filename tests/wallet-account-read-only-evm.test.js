@@ -1,8 +1,6 @@
-import hre from 'hardhat'
+import { ContractFactory, HDNodeWallet, JsonRpcProvider, JsonRpcSigner, Mnemonic } from 'ethers'
 
-import { ContractFactory } from 'ethers'
-
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 
 import { WalletAccountReadOnlyEvm } from '../index.js'
 
@@ -11,13 +9,23 @@ import TestToken from './artifacts/TestToken.json' with { type: 'json' }
 
 const ADDRESS = '0x405005C7c4422390F4B334F64Cf20E0b767131d0'
 
+const RPC_URL = 'http://127.0.0.1:8545'
+
+const NODE_MNEMONIC = 'anger burst story spy face pattern whale quit delay fiction ball solve'
+
+// cacheTimeout -1: ethers' default 250ms read cache returns stale nonces under automining
+const provider = new JsonRpcProvider(RPC_URL, undefined, { cacheTimeout: -1 })
+provider.pollingInterval = 50
+
+const nodeSigner = HDNodeWallet
+  .fromMnemonic(Mnemonic.fromPhrase(NODE_MNEMONIC), "m/44'/60'/0'/0/0")
+  .connect(provider)
+
 const INITIAL_BALANCE = 1_000_000_000_000_000_000n
 const INITIAL_TOKEN_BALANCE = 1_000_000n
 
 async function deployTestToken() {
-  const [signer] = await hre.ethers.getSigners()
-
-  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, signer)
+  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, nodeSigner)
   const contract = await factory.deploy()
   const transaction = await contract.deploymentTransaction()
 
@@ -28,11 +36,11 @@ async function deployTestToken() {
 
 describe('WalletAccountReadOnlyEvm', () => {
   let testToken,
-    account
+    account,
+    snapshotId
 
   async function sendEthersTo(to, value) {
-    const [signer] = await hre.ethers.getSigners()
-    const transaction = await signer.sendTransaction({ to, value })
+    const transaction = await nodeSigner.sendTransaction({ to, value })
     await transaction.wait()
   }
 
@@ -42,6 +50,8 @@ describe('WalletAccountReadOnlyEvm', () => {
   }
 
   beforeEach(async () => {
+    snapshotId = await provider.send('evm_snapshot', [])
+
     testToken = await deployTestToken()
 
     await sendEthersTo(ADDRESS, INITIAL_BALANCE)
@@ -49,12 +59,16 @@ describe('WalletAccountReadOnlyEvm', () => {
     await sendTestTokensTo(ADDRESS, INITIAL_TOKEN_BALANCE)
 
     account = new WalletAccountReadOnlyEvm(ADDRESS, {
-      provider: hre.network.provider
+      provider: RPC_URL
     })
   })
 
   afterEach(async () => {
-    await hre.network.provider.send('hardhat_reset')
+    await provider.send('evm_revert', [snapshotId])
+  })
+
+  afterAll(() => {
+    provider.destroy()
   })
 
   describe('address', () => {
@@ -142,7 +156,7 @@ describe('WalletAccountReadOnlyEvm', () => {
         value: 1_000
       }
 
-      const EXPECTED_FEE = 49_611_983_472_910n
+      const EXPECTED_FEE = 49_375_497_680_218n
 
       const { fee } = await account.quoteSendTransaction(TRANSACTION)
 
@@ -156,7 +170,7 @@ describe('WalletAccountReadOnlyEvm', () => {
         data: testToken.interface.encodeFunctionData('balanceOf', ['0x636e9c21f27d9401ac180666bf8DC0D3FcEb0D24'])
       }
 
-      const EXPECTED_FEE = 57_395_969_261_360n
+      const EXPECTED_FEE = 57_122_379_488_528n
 
       const { fee } = await account.quoteSendTransaction(TRANSACTION_WITH_DATA)
 
@@ -175,7 +189,7 @@ describe('WalletAccountReadOnlyEvm', () => {
         }]
       }
 
-      const EXPECTED_FEE = 108_671_056_222_910n
+      const EXPECTED_FEE = 108_153_053_130_218n
 
       const { fee } = await account.quoteSendTransaction(TRANSACTION_WITH_AUTHORIZATION_LIST)
 
@@ -198,7 +212,7 @@ describe('WalletAccountReadOnlyEvm', () => {
         amount: 100
       }
 
-      const EXPECTED_FEE = 123_145_253_772_480n
+      const EXPECTED_FEE = 122_558_256_419_904n
 
       const { fee } = await account.quoteTransfer(TRANSFER)
 
@@ -215,7 +229,7 @@ describe('WalletAccountReadOnlyEvm', () => {
 
   describe('getTransactionReceipt', () => {
     test('should return the correct transaction receipt', async () => {
-      const [sender] = await hre.ethers.getSigners()
+      const sender = nodeSigner
 
       const TRANSACTION = {
         to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
@@ -261,11 +275,8 @@ describe('WalletAccountReadOnlyEvm', () => {
     test('should return the correct allowance after it has been set', async () => {
       const allowanceAmount = 500_000n
 
-      await hre.network.provider.request({
-        method: 'hardhat_impersonateAccount',
-        params: [ADDRESS]
-      })
-      const ownerSigner = await hre.ethers.getSigner(ADDRESS)
+      await provider.send('hardhat_impersonateAccount', [ADDRESS])
+      const ownerSigner = new JsonRpcSigner(provider, ADDRESS)
 
       const approveTx = await testToken.connect(ownerSigner).approve(SPENDER_ADDRESS, allowanceAmount)
       await approveTx.wait()
@@ -388,7 +399,7 @@ describe('WalletAccountReadOnlyEvm', () => {
 
       const designator = '0xef0100' + DELEGATE_ADDRESS.slice(2)
 
-      await hre.network.provider.send('hardhat_setCode', [ADDRESS, designator])
+      await provider.send('hardhat_setCode', [ADDRESS, designator])
 
       const delegation = await account.getDelegation()
 

@@ -1,10 +1,10 @@
-import hre from 'hardhat'
-
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 
 import WalletManagerEvm, { WalletAccountEvm } from '../index.js'
 import SeedSignerEvm from '../src/signers/seed-signer-evm.js'
 import PrivateKeySignerEvm from '../src/signers/private-key-signer-evm.js'
+
+const RPC_URL = 'http://127.0.0.1:8545'
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
 
@@ -17,7 +17,7 @@ describe('WalletManagerEvm', () => {
 
   beforeEach(async () => {
     const root = new SeedSignerEvm(SEED_PHRASE)
-    wallet = new WalletManagerEvm(root, { provider: hre.network.provider })
+    wallet = new WalletManagerEvm(root, { provider: RPC_URL })
   })
 
   afterEach(() => {

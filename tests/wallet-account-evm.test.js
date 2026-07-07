@@ -1,8 +1,6 @@
-import hre from 'hardhat'
+import { ContractFactory, Contract, HDNodeWallet, JsonRpcProvider, Mnemonic } from 'ethers'
 
-import { ContractFactory, Contract } from 'ethers'
-
-import { afterEach, beforeEach, describe, expect, test, jest } from '@jest/globals'
+import { afterAll, afterEach, beforeEach, describe, expect, test, jest } from '@jest/globals'
 
 import * as bip39 from 'bip39'
 
@@ -16,7 +14,19 @@ import SimpleDelegateContract from './artifacts/SimpleDelegateContract.json' wit
 
 
 const USDT_MAINNET_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-const DELEGATE_CONTRACT_ADDRESS = '0xbe08d4d81ebea77f6aa54b2067ea5f56005f98de'
+const DELEGATE_CONTRACT_ADDRESS = '0xbe08D4d81EbeA77f6AA54B2067EA5F56005F98dE'
+
+const RPC_URL = 'http://127.0.0.1:8545'
+
+const NODE_MNEMONIC = 'anger burst story spy face pattern whale quit delay fiction ball solve'
+
+// cacheTimeout -1: ethers' default 250ms read cache returns stale nonces under automining
+const provider = new JsonRpcProvider(RPC_URL, undefined, { cacheTimeout: -1 })
+provider.pollingInterval = 50
+
+const nodeSigner = HDNodeWallet
+  .fromMnemonic(Mnemonic.fromPhrase(NODE_MNEMONIC), "m/44'/60'/0'/0/0")
+  .connect(provider)
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
 
@@ -38,9 +48,7 @@ const INITIAL_BALANCE = 1_000_000_000_000_000_000n
 const INITIAL_TOKEN_BALANCE = 1_000_000n
 
 async function deploySimpleDelegateContract () {
-  const [signer] = await hre.ethers.getSigners()
-
-  const factory = new ContractFactory(SimpleDelegateContract.abi, SimpleDelegateContract.bytecode, signer)
+  const factory = new ContractFactory(SimpleDelegateContract.abi, SimpleDelegateContract.bytecode, nodeSigner)
   const contract = await factory.deploy()
   const transaction = await contract.deploymentTransaction()
 
@@ -50,9 +58,7 @@ async function deploySimpleDelegateContract () {
 }
 
 async function deployTestToken () {
-  const [signer] = await hre.ethers.getSigners()
-
-  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, signer)
+  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, nodeSigner)
   const contract = await factory.deploy()
   const transaction = await contract.deploymentTransaction()
 
@@ -64,11 +70,11 @@ async function deployTestToken () {
 describe('WalletAccountEvm', () => {
   let testToken,
     delegateContract,
-    account
+    account,
+    snapshotId
 
   async function sendEthersTo (to, value) {
-    const [signer] = await hre.ethers.getSigners()
-    const transaction = await signer.sendTransaction({ to, value })
+    const transaction = await nodeSigner.sendTransaction({ to, value })
     await transaction.wait()
   }
 
@@ -78,6 +84,8 @@ describe('WalletAccountEvm', () => {
   }
 
   beforeEach(async () => {
+    snapshotId = await provider.send('evm_snapshot', [])
+
     testToken = await deployTestToken()
     delegateContract = await deploySimpleDelegateContract()
 
@@ -87,13 +95,17 @@ describe('WalletAccountEvm', () => {
 
     const root = new SeedSignerEvm(SEED_PHRASE)
     const signer = await root.derive("0'/0/0")
-    account = new WalletAccountEvm(signer, { provider: hre.network.provider })
+    account = new WalletAccountEvm(signer, { provider: RPC_URL })
   })
 
   afterEach(async () => {
     account.dispose()
 
-    await hre.network.provider.send('hardhat_reset')
+    await provider.send('evm_revert', [snapshotId])
+  })
+
+  afterAll(() => {
+    provider.destroy()
   })
 
   describe('constructor (seed overload)', () => {
@@ -146,7 +158,7 @@ describe('WalletAccountEvm', () => {
   describe('fromPrivateKey', () => {
     test('should create the account from a raw private key', async () => {
       const account = WalletAccountEvm.fromPrivateKey(ACCOUNT.keyPair.privateKey, {
-        provider: hre.network.provider
+        provider: RPC_URL
       })
 
       expect(account).toBeInstanceOf(WalletAccountEvm)
@@ -247,7 +259,7 @@ describe('WalletAccountEvm', () => {
 
     test('should throw if transaction fee exceeds the transaction max fee configuration', async () => {
       const account = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: 0
       })
 
@@ -269,7 +281,7 @@ describe('WalletAccountEvm', () => {
       const { fee } = await account.quoteSendTransaction(TRANSACTION)
 
       const accountAtLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: fee
       })
 
@@ -282,7 +294,7 @@ describe('WalletAccountEvm', () => {
       const { fee } = await account.quoteSendTransaction(TRANSACTION)
 
       const accountBelowLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: fee + 1n
       })
 
@@ -299,11 +311,11 @@ describe('WalletAccountEvm', () => {
         value: 1_000
       }
 
-      const EXPECTED_FEE = 46_114_898_254_972n
+      const EXPECTED_FEE = 45_868_001_678_552n
 
       const { hash, fee } = await account.sendTransaction(TRANSACTION)
 
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
 
       expect(transaction.to).toBe(TRANSACTION.to)
       expect(transaction.value).toBe(BigInt(TRANSACTION.value))
@@ -313,14 +325,14 @@ describe('WalletAccountEvm', () => {
 
     test('should successfully send a transaction with PrivateKeySignerEvm', async () => {
       const pkSigner = new PrivateKeySignerEvm(ACCOUNT.keyPair.privateKey)
-      const pkAccount = new WalletAccountEvm(pkSigner, { provider: hre.network.provider })
+      const pkAccount = new WalletAccountEvm(pkSigner, { provider: RPC_URL })
       const TRANSACTION = {
         to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
         value: 1_000
       }
-      const EXPECTED_FEE = 46_114_898_254_972n
+      const EXPECTED_FEE = 45_868_001_678_552n
       const { hash, fee } = await pkAccount.sendTransaction(TRANSACTION)
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
       expect(transaction.hash).toBe(hash)
       expect(transaction.to).toBe(TRANSACTION.to)
       expect(transaction.value).toBe(BigInt(TRANSACTION.value))
@@ -335,11 +347,11 @@ describe('WalletAccountEvm', () => {
         data: testToken.interface.encodeFunctionData('balanceOf', ['0x636e9c21f27d9401ac180666bf8DC0D3FcEb0D24'])
       }
 
-      const EXPECTED_FEE = 53_350_200_847_712n
+      const EXPECTED_FEE = 53_064_566_867_392n
 
       const { hash, fee } = await account.sendTransaction(TRANSACTION_WITH_DATA)
 
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
 
       expect(transaction.to).toBe(TRANSACTION_WITH_DATA.to)
       expect(transaction.value).toBe(BigInt(TRANSACTION_WITH_DATA.value))
@@ -354,13 +366,13 @@ describe('WalletAccountEvm', () => {
         data: SimpleDelegateContract.bytecode
       })
 
-      const receipt = await hre.ethers.provider.getTransactionReceipt(hash)
+      const receipt = await provider.getTransactionReceipt(hash)
 
       // A contract-creation transaction has no recipient and yields a contract address.
       expect(receipt.to).toBeNull()
       expect(receipt.contractAddress).toBeTruthy()
 
-      const code = await hre.ethers.provider.getCode(receipt.contractAddress)
+      const code = await provider.getCode(receipt.contractAddress)
       expect(code).not.toBe('0x')
     })
 
@@ -377,11 +389,11 @@ describe('WalletAccountEvm', () => {
         authorizationList: [auth]
       }
 
-      const EXPECTED_FEE = 101_010_972_554_972n
+      const EXPECTED_FEE = 100_470_165_478_552n
 
       const { hash, fee } = await account.sendTransaction(TRANSACTION_WITH_AUTHORIZATION_LIST)
 
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
 
       expect(transaction.to).toBe(account.address)
       expect(transaction.value).toBe(0n)
@@ -408,7 +420,7 @@ describe('WalletAccountEvm', () => {
       }
 
       const account = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: 0
       })
 
@@ -425,7 +437,7 @@ describe('WalletAccountEvm', () => {
       const { fee } = await account.quoteSendTransaction(TRANSACTION)
 
       const accountAtLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: fee
       })
 
@@ -443,7 +455,7 @@ describe('WalletAccountEvm', () => {
       const { fee } = await account.quoteSendTransaction(TRANSACTION)
 
       const accountBelowLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: hre.network.provider,
+        provider: RPC_URL,
         transactionMaxFee: fee + 1n
       })
 
@@ -468,10 +480,10 @@ describe('WalletAccountEvm', () => {
         amount: 100
       }
 
-      const EXPECTED_FEE = 114_464_902_444_416n
+      const EXPECTED_FEE = 113_852_063_782_656n
 
       const { hash, fee } = await account.transfer(TRANSFER)
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
       const data = testToken.interface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
 
       expect(transaction.to).toBe(TRANSFER.token)
@@ -493,10 +505,10 @@ describe('WalletAccountEvm', () => {
         authorizationList: [auth]
       }
 
-      const EXPECTED_FEE = 169_360_976_744_416n
+      const EXPECTED_FEE = 168_454_227_582_656n
 
       const { hash, fee } = await account.transfer(TRANSFER)
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
       const data = testToken.interface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
 
       expect(transaction.to).toBe(TRANSFER.token)
@@ -527,7 +539,7 @@ describe('WalletAccountEvm', () => {
 
       const account = new WalletAccountEvm(
         await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"),
-        { provider: hre.network.provider, transferMaxFee: 0 }
+        { provider: RPC_URL, transferMaxFee: 0 }
       )
 
       await expect(account.transfer(TRANSFER))
@@ -554,7 +566,7 @@ describe('WalletAccountEvm', () => {
       }
 
       const { hash, fee } = await account.approve(APPROVE_OPTIONS)
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
       const data = testToken.interface.encodeFunctionData('approve', [SPENDER, AMOUNT])
 
       expect(transaction.hash).toBe(hash)
@@ -591,7 +603,7 @@ describe('WalletAccountEvm', () => {
       }
 
       const abi = ['function approve(address spender, uint256 amount) returns (bool)']
-      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, hre.ethers.provider)
+      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, provider)
       const expectedData = contract.interface.encodeFunctionData('approve', [SPENDER, AMOUNT])
 
       const { hash, fee } = await account.approve(approveOptions)
@@ -616,7 +628,7 @@ describe('WalletAccountEvm', () => {
       }
 
       const abi = ['function approve(address spender, uint256 amount) returns (bool)']
-      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, hre.ethers.provider)
+      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, provider)
       const expectedData = contract.interface.encodeFunctionData('approve', [SPENDER, 0])
 
       const { hash, fee } = await account.approve(approveOptions)
@@ -674,11 +686,11 @@ describe('WalletAccountEvm', () => {
 
   describe('delegate', () => {
     test('should successfully set delegation to a contract', async () => {
-      const EXPECTED_FEE = 101_404_028_446_960n
+      const EXPECTED_FEE = 100_861_116_971_360n
 
       const { hash, fee } = await account.delegate(DELEGATE_CONTRACT_ADDRESS)
 
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
 
       expect(transaction.to).toBe(account.address)
       expect(transaction.value).toBe(0n)
@@ -708,11 +720,11 @@ describe('WalletAccountEvm', () => {
 
   describe('revokeDelegation', () => {
     test('should successfully set a delegation to the zero address', async () => {
-      const EXPECTED_FEE = 101_010_972_554_972n
+      const EXPECTED_FEE = 100_470_165_478_552n
 
       const { hash, fee } = await account.revokeDelegation()
 
-      const transaction = await hre.ethers.provider.getTransaction(hash)
+      const transaction = await provider.getTransaction(hash)
 
       expect(transaction.to).toBe(account.address)
       expect(transaction.value).toBe(0n)
