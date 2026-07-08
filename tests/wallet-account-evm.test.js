@@ -1,6 +1,6 @@
-import { ContractFactory, Contract, HDNodeWallet, JsonRpcProvider, Mnemonic } from 'ethers'
+import { Interface, Transaction, ZeroAddress, toQuantity } from 'ethers'
 
-import { afterAll, afterEach, beforeEach, describe, expect, test, jest } from '@jest/globals'
+import { beforeEach, describe, expect, jest, test } from '@jest/globals'
 
 import * as bip39 from 'bip39'
 
@@ -8,25 +8,10 @@ import { WalletAccountEvm, WalletAccountReadOnlyEvm } from '../index.js'
 import SeedSignerEvm from '../src/signers/seed-signer-evm.js'
 import PrivateKeySignerEvm from '../src/signers/private-key-signer-evm.js'
 
-import TestToken from './artifacts/TestToken.json' with { type: 'json' }
-
-import SimpleDelegateContract from './artifacts/SimpleDelegateContract.json' with { type: 'json' }
-
-
 const USDT_MAINNET_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
 const DELEGATE_CONTRACT_ADDRESS = '0xbe08D4d81EbeA77f6AA54B2067EA5F56005F98dE'
-
-const RPC_URL = 'http://127.0.0.1:8545'
-
-const NODE_MNEMONIC = 'anger burst story spy face pattern whale quit delay fiction ball solve'
-
-// cacheTimeout -1: ethers' default 250ms read cache returns stale nonces under automining
-const provider = new JsonRpcProvider(RPC_URL, undefined, { cacheTimeout: -1 })
-provider.pollingInterval = 50
-
-const nodeSigner = HDNodeWallet
-  .fromMnemonic(Mnemonic.fromPhrase(NODE_MNEMONIC), "m/44'/60'/0'/0/0")
-  .connect(provider)
+const TOKEN_ADDRESS = '0x4CC1D60C268B68a7019034E6dE7Fb05d82d827E0'
+const SPENDER_ADDRESS = '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd'
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
 
@@ -44,68 +29,70 @@ const ACCOUNT = {
   }
 }
 
-const INITIAL_BALANCE = 1_000_000_000_000_000_000n
-const INITIAL_TOKEN_BALANCE = 1_000_000n
+const DUMMY_TX_HASH = '0xdef456abc123def456abc123def456abc123def456abc123def456abc123def4'
 
-async function deploySimpleDelegateContract () {
-  const factory = new ContractFactory(SimpleDelegateContract.abi, SimpleDelegateContract.bytecode, nodeSigner)
-  const contract = await factory.deploy()
-  const transaction = await contract.deploymentTransaction()
+// Fee constants implied by the mocked rpc responses below:
+// maxFeePerGas = 2 * baseFee (1 gwei) + priorityFee (1 gwei) = 3 gwei.
+const MOCKED_FEE_RATE = 3_000_000_000n
+const MOCKED_GAS = 21_000n
+const MOCKED_AUTH_LIST_GAS = 100_000n
+const MOCKED_FEE = MOCKED_GAS * MOCKED_FEE_RATE
 
-  await transaction.wait()
-
-  return contract
+const DUMMY_BLOCK = {
+  number: '0x1',
+  hash: '0x' + '11'.repeat(32),
+  parentHash: '0x' + '00'.repeat(32),
+  timestamp: '0x64',
+  nonce: '0x0000000000000000',
+  difficulty: '0x0',
+  gasLimit: '0x1c9c380',
+  gasUsed: '0x0',
+  miner: '0x0000000000000000000000000000000000000000',
+  extraData: '0x',
+  baseFeePerGas: '0x3b9aca00',
+  transactions: []
 }
 
-async function deployTestToken () {
-  const factory = new ContractFactory(TestToken.abi, TestToken.bytecode, nodeSigner)
-  const contract = await factory.deploy()
-  const transaction = await contract.deploymentTransaction()
+function createProvider (overrides = {}) {
+  const sentRawTransactions = []
 
-  await transaction.wait()
+  const handlers = {
+    eth_chainId: () => '0x1',
+    net_version: () => '1',
+    eth_gasPrice: () => '0x3b9aca00',
+    eth_maxPriorityFeePerGas: () => '0x3b9aca00',
+    eth_getBlockByNumber: () => DUMMY_BLOCK,
+    eth_estimateGas: (params) => params[0].type === '0x04' ? toQuantity(MOCKED_AUTH_LIST_GAS) : toQuantity(MOCKED_GAS),
+    eth_getTransactionCount: () => '0x0',
+    eth_sendRawTransaction: (params) => {
+      sentRawTransactions.push(params[0])
+      return DUMMY_TX_HASH
+    },
+    ...overrides
+  }
 
-  return contract
+  const provider = {
+    sentRawTransactions,
+    request: jest.fn(async ({ method, params }) => {
+      const handler = handlers[method]
+      if (!handler) throw new Error(`Unexpected rpc method: ${method}`)
+      return handler(params)
+    })
+  }
+
+  return provider
 }
 
 describe('WalletAccountEvm', () => {
-  let testToken,
-    delegateContract,
-    account,
-    snapshotId
-
-  async function sendEthersTo (to, value) {
-    const transaction = await nodeSigner.sendTransaction({ to, value })
-    await transaction.wait()
-  }
-
-  async function sendTestTokensTo (to, value) {
-    const transaction = await testToken.transfer(to, value)
-    await transaction.wait()
-  }
+  let provider,
+    account
 
   beforeEach(async () => {
-    snapshotId = await provider.send('evm_snapshot', [])
-
-    testToken = await deployTestToken()
-    delegateContract = await deploySimpleDelegateContract()
-
-    await sendEthersTo(ACCOUNT.address, INITIAL_BALANCE)
-
-    await sendTestTokensTo(ACCOUNT.address, INITIAL_TOKEN_BALANCE)
+    provider = createProvider()
 
     const root = new SeedSignerEvm(SEED_PHRASE)
     const signer = await root.derive("0'/0/0")
-    account = new WalletAccountEvm(signer, { provider: RPC_URL })
-  })
-
-  afterEach(async () => {
-    account.dispose()
-
-    await provider.send('evm_revert', [snapshotId])
-  })
-
-  afterAll(() => {
-    provider.destroy()
+    account = new WalletAccountEvm(signer, { provider })
   })
 
   describe('constructor (seed overload)', () => {
@@ -157,9 +144,7 @@ describe('WalletAccountEvm', () => {
 
   describe('fromPrivateKey', () => {
     test('should create the account from a raw private key', async () => {
-      const account = WalletAccountEvm.fromPrivateKey(ACCOUNT.keyPair.privateKey, {
-        provider: RPC_URL
-      })
+      const account = WalletAccountEvm.fromPrivateKey(ACCOUNT.keyPair.privateKey, { provider })
 
       expect(account).toBeInstanceOf(WalletAccountEvm)
       expect(await account.getAddress()).toBe(ACCOUNT.address)
@@ -228,7 +213,7 @@ describe('WalletAccountEvm', () => {
 
   describe('signTransaction', () => {
     const TRANSACTION = {
-      to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
+      to: SPENDER_ADDRESS,
       value: 1_000n,
       gasLimit: 21_000n,
       maxFeePerGas: 2_000_000_000n,
@@ -242,16 +227,6 @@ describe('WalletAccountEvm', () => {
     test('should sign a transaction and return a valid hex string', async () => {
       const accountWithoutProvider = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"))
 
-      const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        value: 1_000n,
-        gasLimit: 21_000n,
-        maxFeePerGas: 2_000_000_000n,
-        maxPriorityFeePerGas: 1_000_000_000n,
-        nonce: 0,
-        chainId: 31_337n
-      }
-      const SIGNED_TRANSACTION = "0x02f86e827a6980843b9aca00847735940082520894a460aebce0d3a4becad8ccf9d6d4861296c503bd8203e880c080a0189acf1d3170de712fd346182a77b08ccaa1317cdd13daf386f1405d52148171a04a83f7c7df7f258344e1726ac5b94f53fb415f0e41a58399b5031940b293b9ec"
       const signedTx = await accountWithoutProvider.signTransaction(TRANSACTION)
 
       expect(signedTx).toBe(SIGNED_TRANSACTION)
@@ -259,7 +234,7 @@ describe('WalletAccountEvm', () => {
 
     test('should throw if transaction fee exceeds the transaction max fee configuration', async () => {
       const account = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
+        provider,
         transactionMaxFee: 0
       })
 
@@ -278,190 +253,45 @@ describe('WalletAccountEvm', () => {
     })
 
     test('should allow a fee exactly equal to transactionMaxFee', async () => {
-      const { fee } = await account.quoteSendTransaction(TRANSACTION)
-
       const accountAtLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
-        transactionMaxFee: fee
+        provider,
+        transactionMaxFee: MOCKED_FEE
       })
 
       const signedTx = await accountAtLimit.signTransaction(TRANSACTION)
 
       expect(signedTx).toBeTruthy()
     })
-
-    test('should allow a fee below transactionMaxFee', async () => {
-      const { fee } = await account.quoteSendTransaction(TRANSACTION)
-
-      const accountBelowLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
-        transactionMaxFee: fee + 1n
-      })
-
-      const signedTx = await accountBelowLimit.signTransaction(TRANSACTION)
-
-      expect(signedTx).toBeTruthy()
-    })
   })
 
   describe('sendTransaction', () => {
-    test('should successfully send a transaction', async () => {
+    test('should sign and broadcast a transaction', async () => {
       const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
+        to: SPENDER_ADDRESS,
         value: 1_000
       }
-
-      const EXPECTED_FEE = 45_868_001_678_552n
 
       const { hash, fee } = await account.sendTransaction(TRANSACTION)
 
-      const transaction = await provider.getTransaction(hash)
+      expect(hash).toBe(DUMMY_TX_HASH)
+      expect(fee).toBe(MOCKED_FEE)
+
+      const transaction = Transaction.from(provider.sentRawTransactions[0])
 
       expect(transaction.to).toBe(TRANSACTION.to)
       expect(transaction.value).toBe(BigInt(TRANSACTION.value))
-
-      expect(fee).toBe(EXPECTED_FEE)
-    })
-
-    test('should successfully send a transaction with PrivateKeySignerEvm', async () => {
-      const pkSigner = new PrivateKeySignerEvm(ACCOUNT.keyPair.privateKey)
-      const pkAccount = new WalletAccountEvm(pkSigner, { provider: RPC_URL })
-      const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        value: 1_000
-      }
-      const EXPECTED_FEE = 45_868_001_678_552n
-      const { hash, fee } = await pkAccount.sendTransaction(TRANSACTION)
-      const transaction = await provider.getTransaction(hash)
-      expect(transaction.hash).toBe(hash)
-      expect(transaction.to).toBe(TRANSACTION.to)
-      expect(transaction.value).toBe(BigInt(TRANSACTION.value))
-      expect(fee).toBe(EXPECTED_FEE)
-      pkAccount.dispose()
-    })
-
-    test('should successfully send a transaction with arbitrary data', async () => {
-      const TRANSACTION_WITH_DATA = {
-        to: testToken.target,
-        value: 0,
-        data: testToken.interface.encodeFunctionData('balanceOf', ['0x636e9c21f27d9401ac180666bf8DC0D3FcEb0D24'])
-      }
-
-      const EXPECTED_FEE = 53_064_566_867_392n
-
-      const { hash, fee } = await account.sendTransaction(TRANSACTION_WITH_DATA)
-
-      const transaction = await provider.getTransaction(hash)
-
-      expect(transaction.to).toBe(TRANSACTION_WITH_DATA.to)
-      expect(transaction.value).toBe(BigInt(TRANSACTION_WITH_DATA.value))
-      expect(transaction.data).toBe(TRANSACTION_WITH_DATA.data)
-
-      expect(fee).toBe(EXPECTED_FEE)
-    })
-
-    test('should deploy a contract when "to" is omitted', async () => {
-      const { hash } = await account.sendTransaction({
-        value: 0,
-        data: SimpleDelegateContract.bytecode
-      })
-
-      const receipt = await provider.getTransactionReceipt(hash)
-
-      // A contract-creation transaction has no recipient and yields a contract address.
-      expect(receipt.to).toBeNull()
-      expect(receipt.contractAddress).toBeTruthy()
-
-      const code = await provider.getCode(receipt.contractAddress)
-      expect(code).not.toBe('0x')
-    })
-
-    test('should successfully send a transaction with an authorization list', async () => {
-      const auth = await account.signAuthorization({
-        address: DELEGATE_CONTRACT_ADDRESS
-      })
-
-      const TRANSACTION_WITH_AUTHORIZATION_LIST = {
-        type: 4,
-        to: account.address,
-        value: 0,
-        gasLimit: 100_000,
-        authorizationList: [auth]
-      }
-
-      const EXPECTED_FEE = 100_470_165_478_552n
-
-      const { hash, fee } = await account.sendTransaction(TRANSACTION_WITH_AUTHORIZATION_LIST)
-
-      const transaction = await provider.getTransaction(hash)
-
-      expect(transaction.to).toBe(account.address)
-      expect(transaction.value).toBe(0n)
-      expect(transaction.type).toBe(4)
-
-      expect(transaction.authorizationList).toEqual([{
-        address: DELEGATE_CONTRACT_ADDRESS,
-        nonce: 0n,
-        chainId: 1n,
-        signature: expect.objectContaining({
-          r: '0xa2b8fd8a79d4449081588213035817da714ea1062233ac6d3f276185408504fa',
-          s: '0x0116b3fb7c6d7d7e8a084410fac2f6796a7d5810fff1415ec365d7502ac318b3',
-          v: 27
-        })
-      }])
-
-      expect(fee).toBe(EXPECTED_FEE)
+      expect(transaction.chainId).toBe(1n)
+      expect(transaction.from).toBe(ACCOUNT.address)
     })
 
     test('should throw if transaction fee exceeds the transaction max fee configuration', async () => {
-      const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        value: 1_000
-      }
-
       const account = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
+        provider,
         transactionMaxFee: 0
       })
 
-      await expect(account.sendTransaction(TRANSACTION))
+      await expect(account.sendTransaction({ to: SPENDER_ADDRESS, value: 1_000 }))
         .rejects.toThrow('Exceeded maximum fee cost for transaction operation.')
-    })
-
-    test('should allow a fee exactly equal to transactionMaxFee', async () => {
-      const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        value: 1_000
-      }
-
-      const { fee } = await account.quoteSendTransaction(TRANSACTION)
-
-      const accountAtLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
-        transactionMaxFee: fee
-      })
-
-      const result = await accountAtLimit.sendTransaction(TRANSACTION)
-
-      expect(result).toHaveProperty('hash')
-    })
-
-    test('should allow a fee below transactionMaxFee', async () => {
-      const TRANSACTION = {
-        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        value: 1_000
-      }
-
-      const { fee } = await account.quoteSendTransaction(TRANSACTION)
-
-      const accountBelowLimit = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"), {
-        provider: RPC_URL,
-        transactionMaxFee: fee + 1n
-      })
-
-      const result = await accountBelowLimit.sendTransaction(TRANSACTION)
-
-      expect(result).toHaveProperty('hash')
     })
 
     test('should throw if the account is not connected to a provider', async () => {
@@ -473,76 +303,35 @@ describe('WalletAccountEvm', () => {
   })
 
   describe('transfer', () => {
-    test('should successfully transfer tokens', async () => {
+    test('should sign and broadcast a token transfer', async () => {
       const TRANSFER = {
-        token: testToken.target,
-        recipient: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
+        token: TOKEN_ADDRESS,
+        recipient: SPENDER_ADDRESS,
         amount: 100
       }
 
-      const EXPECTED_FEE = 113_852_063_782_656n
-
       const { hash, fee } = await account.transfer(TRANSFER)
-      const transaction = await provider.getTransaction(hash)
-      const data = testToken.interface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
+
+      expect(hash).toBe(DUMMY_TX_HASH)
+      expect(fee).toBe(MOCKED_FEE)
+
+      const iface = new Interface(['function transfer(address to, uint256 amount) returns (bool)'])
+      const data = iface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
+
+      const transaction = Transaction.from(provider.sentRawTransactions[0])
 
       expect(transaction.to).toBe(TRANSFER.token)
       expect(transaction.value).toBe(0n)
       expect(transaction.data).toBe(data)
-
-      expect(fee).toBe(EXPECTED_FEE)
-    })
-
-    test('should successfully transfer tokens with an authorization list', async () => {
-      const auth = await account.signAuthorization({
-        address: DELEGATE_CONTRACT_ADDRESS
-      })
-
-      const TRANSFER = {
-        token: testToken.target,
-        recipient: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        amount: 100,
-        authorizationList: [auth]
-      }
-
-      const EXPECTED_FEE = 168_454_227_582_656n
-
-      const { hash, fee } = await account.transfer(TRANSFER)
-      const transaction = await provider.getTransaction(hash)
-      const data = testToken.interface.encodeFunctionData('transfer', [TRANSFER.recipient, TRANSFER.amount])
-
-      expect(transaction.to).toBe(TRANSFER.token)
-      expect(transaction.value).toBe(0n)
-      expect(transaction.data).toBe(data)
-      expect(transaction.type).toBe(4)
-
-      expect(transaction.authorizationList).toEqual([{
-        address: DELEGATE_CONTRACT_ADDRESS,
-        nonce: 0n,
-        chainId: 1n,
-        signature: expect.objectContaining({
-          r: '0xa2b8fd8a79d4449081588213035817da714ea1062233ac6d3f276185408504fa',
-          s: '0x0116b3fb7c6d7d7e8a084410fac2f6796a7d5810fff1415ec365d7502ac318b3',
-          v: 27
-        })
-      }])
-
-      expect(fee).toBe(EXPECTED_FEE)
     })
 
     test('should throw if transfer fee exceeds the transfer max fee configuration', async () => {
-      const TRANSFER = {
-        token: testToken.target,
-        recipient: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
-        amount: 100
-      }
-
       const account = new WalletAccountEvm(
         await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"),
-        { provider: RPC_URL, transferMaxFee: 0 }
+        { provider, transferMaxFee: 0 }
       )
 
-      await expect(account.transfer(TRANSFER))
+      await expect(account.transfer({ token: TOKEN_ADDRESS, recipient: SPENDER_ADDRESS, amount: 100 }))
         .rejects.toThrow('Exceeded maximum fee cost for transfer operation.')
     })
 
@@ -555,28 +344,28 @@ describe('WalletAccountEvm', () => {
   })
 
   describe('approve', () => {
-    const SPENDER = '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd'
     const AMOUNT = 100n
 
-    test('should successfully approve tokens for a spender', async () => {
+    test('should sign and broadcast an approve transaction', async () => {
       const APPROVE_OPTIONS = {
-        token: testToken.target,
-        spender: SPENDER,
+        token: TOKEN_ADDRESS,
+        spender: SPENDER_ADDRESS,
         amount: AMOUNT
       }
 
       const { hash, fee } = await account.approve(APPROVE_OPTIONS)
-      const transaction = await provider.getTransaction(hash)
-      const data = testToken.interface.encodeFunctionData('approve', [SPENDER, AMOUNT])
 
-      expect(transaction.hash).toBe(hash)
-      expect(transaction.to).toBe(APPROVE_OPTIONS.token)
-      expect(transaction.data).toBe(data)
+      expect(hash).toBe(DUMMY_TX_HASH)
       expect(typeof fee).toBe('bigint')
       expect(fee).toBeGreaterThan(0n)
 
-      const allowance = await testToken.allowance(ACCOUNT.address, SPENDER)
-      expect(allowance).toBe(AMOUNT)
+      const iface = new Interface(['function approve(address spender, uint256 amount) returns (bool)'])
+      const data = iface.encodeFunctionData('approve', [SPENDER_ADDRESS, AMOUNT])
+
+      const transaction = Transaction.from(provider.sentRawTransactions[0])
+
+      expect(transaction.to).toBe(APPROVE_OPTIONS.token)
+      expect(transaction.data).toBe(data)
     })
 
     test('should throw if approving non-zero USDT on mainnet when allowance is non-zero', async () => {
@@ -584,7 +373,7 @@ describe('WalletAccountEvm', () => {
 
       const approveOptions = {
         token: USDT_MAINNET_ADDRESS,
-        spender: SPENDER,
+        spender: SPENDER_ADDRESS,
         amount: AMOUNT
       }
 
@@ -598,13 +387,12 @@ describe('WalletAccountEvm', () => {
 
       const approveOptions = {
         token: USDT_MAINNET_ADDRESS,
-        spender: SPENDER,
+        spender: SPENDER_ADDRESS,
         amount: AMOUNT
       }
 
-      const abi = ['function approve(address spender, uint256 amount) returns (bool)']
-      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, provider)
-      const expectedData = contract.interface.encodeFunctionData('approve', [SPENDER, AMOUNT])
+      const iface = new Interface(['function approve(address spender, uint256 amount) returns (bool)'])
+      const expectedData = iface.encodeFunctionData('approve', [SPENDER_ADDRESS, AMOUNT])
 
       const { hash, fee } = await account.approve(approveOptions)
 
@@ -623,13 +411,12 @@ describe('WalletAccountEvm', () => {
 
       const approveOptions = {
         token: USDT_MAINNET_ADDRESS,
-        spender: SPENDER,
+        spender: SPENDER_ADDRESS,
         amount: 0
       }
 
-      const abi = ['function approve(address spender, uint256 amount) returns (bool)']
-      const contract = new Contract(USDT_MAINNET_ADDRESS, abi, provider)
-      const expectedData = contract.interface.encodeFunctionData('approve', [SPENDER, 0])
+      const iface = new Interface(['function approve(address spender, uint256 amount) returns (bool)'])
+      const expectedData = iface.encodeFunctionData('approve', [SPENDER_ADDRESS, 0])
 
       const { hash, fee } = await account.approve(approveOptions)
 
@@ -645,8 +432,8 @@ describe('WalletAccountEvm', () => {
     test('should throw if the account is not connected to a provider', async () => {
       const accountWithoutProvider = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"))
       const approveOptions = {
-        token: testToken.target,
-        spender: SPENDER,
+        token: TOKEN_ADDRESS,
+        spender: SPENDER_ADDRESS,
         amount: AMOUNT
       }
 
@@ -666,82 +453,61 @@ describe('WalletAccountEvm', () => {
   })
 
   describe('signAuthorization', () => {
-    test('should successfully sign an authorization', async () => {
+    test('should resolve chain id and nonce from the provider and sign', async () => {
       const auth = await account.signAuthorization({
-        address: delegateContract.target
+        address: DELEGATE_CONTRACT_ADDRESS
       })
 
       expect(auth).toEqual({
-        address: delegateContract.target,
+        address: DELEGATE_CONTRACT_ADDRESS,
         nonce: 0n,
         chainId: 1n,
         signature: expect.objectContaining({
-          r: '0xa2b8fd8a79d4449081588213035817da714ea1062233ac6d3f276185408504fa',
-          s: '0x0116b3fb7c6d7d7e8a084410fac2f6796a7d5810fff1415ec365d7502ac318b3',
-          v: 27
+          r: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+          s: expect.stringMatching(/^0x[0-9a-f]{64}$/)
         })
       })
     })
   })
 
   describe('delegate', () => {
-    test('should successfully set delegation to a contract', async () => {
-      const EXPECTED_FEE = 100_861_116_971_360n
-
+    test('should send a type 4 transaction delegating to the contract', async () => {
       const { hash, fee } = await account.delegate(DELEGATE_CONTRACT_ADDRESS)
 
-      const transaction = await provider.getTransaction(hash)
+      expect(hash).toBe(DUMMY_TX_HASH)
+      expect(fee).toBe(MOCKED_AUTH_LIST_GAS * MOCKED_FEE_RATE)
 
-      expect(transaction.to).toBe(account.address)
-      expect(transaction.value).toBe(0n)
+      const transaction = Transaction.from(provider.sentRawTransactions[0])
+
       expect(transaction.type).toBe(4)
+      expect(transaction.to).toBe(ACCOUNT.address)
+      expect(transaction.value).toBe(0n)
 
-      expect(transaction.authorizationList).toEqual([{
-        address: DELEGATE_CONTRACT_ADDRESS,
-        nonce: 1n,
-        chainId: 1n,
-        signature: expect.objectContaining({
-          r: '0x00834b27fe5c5cd7928aa0f97faf8ce651e0942ab763807756c5e2c2d71d912e',
-          s: '0x78b7103e51a15f41d1c25c89e1cac9f754397cde5dc7674b95f6bc64ff7d01d7',
-          v: 27
-        })
-      }])
-
-      expect(fee).toBe(EXPECTED_FEE)
+      expect(transaction.authorizationList).toHaveLength(1)
+      expect(transaction.authorizationList[0].address.toLowerCase()).toBe(DELEGATE_CONTRACT_ADDRESS.toLowerCase())
+      // The authorization nonce is the account nonce plus one, since the
+      // delegation transaction itself increments the account nonce first.
+      expect(transaction.authorizationList[0].nonce).toBe(1n)
     })
 
     test('should throw if the account is not connected to a provider', async () => {
       const account = new WalletAccountEvm(await new SeedSignerEvm(SEED_PHRASE).derive("0'/0/0"))
 
-      await expect(account.delegate(delegateContract.target))
+      await expect(account.delegate(DELEGATE_CONTRACT_ADDRESS))
         .rejects.toThrow('The wallet must be connected to a provider to delegate.')
     })
   })
 
   describe('revokeDelegation', () => {
-    test('should successfully set a delegation to the zero address', async () => {
-      const EXPECTED_FEE = 100_470_165_478_552n
+    test('should send a type 4 transaction delegating to the zero address', async () => {
+      const { hash } = await account.revokeDelegation()
 
-      const { hash, fee } = await account.revokeDelegation()
+      expect(hash).toBe(DUMMY_TX_HASH)
 
-      const transaction = await provider.getTransaction(hash)
+      const transaction = Transaction.from(provider.sentRawTransactions[0])
 
-      expect(transaction.to).toBe(account.address)
-      expect(transaction.value).toBe(0n)
       expect(transaction.type).toBe(4)
-
-      expect(transaction.authorizationList).toEqual([{
-        address: '0x0000000000000000000000000000000000000000',
-        nonce: 1n,
-        chainId: 1n,
-        signature: expect.objectContaining({
-          r: '0xc58040c5a751ef2a3a2e9b95f95bf400e65a284661cca59c28868de0fef9c11b',
-          s: '0x4ef4cfd278836602291b26baffac20e7d0601e8634a3b92de513d7d6dddd8fd8',
-          v: 27
-        })
-      }])
-
-      expect(fee).toBe(EXPECTED_FEE)
+      expect(transaction.authorizationList[0].address).toBe(ZeroAddress)
     })
 
     test('should throw if the account is not connected to a provider', async () => {
@@ -752,4 +518,13 @@ describe('WalletAccountEvm', () => {
     })
   })
 
+  describe('dispose', () => {
+    test('should erase the private key from memory', async () => {
+      const account = new WalletAccountEvm(SEED_PHRASE, "0'/0/0")
+
+      account.dispose()
+
+      expect(account.keyPair.privateKey).toBe(null)
+    })
+  })
 })

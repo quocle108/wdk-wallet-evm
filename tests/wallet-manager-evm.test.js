@@ -1,10 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals'
 
 import WalletManagerEvm, { WalletAccountEvm } from '../index.js'
 import SeedSignerEvm from '../src/signers/seed-signer-evm.js'
 import PrivateKeySignerEvm from '../src/signers/private-key-signer-evm.js'
-
-const RPC_URL = 'http://127.0.0.1:8545'
 
 const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink uncle term abuse'
 
@@ -12,12 +10,45 @@ const SEED_PHRASE = 'cook voyage document eight skate token alien guide drink un
 const PRIVATE_KEY = '260905feebf1ec684f36f1599128b85f3a26c2b817f2065a2fc278398449c41f'
 const PRIVATE_KEY_ADDRESS = '0x405005C7c4422390F4B334F64Cf20E0b767131d0'
 
+const DUMMY_BLOCK = {
+  number: '0x1',
+  hash: '0x' + '11'.repeat(32),
+  parentHash: '0x' + '00'.repeat(32),
+  timestamp: '0x64',
+  nonce: '0x0000000000000000',
+  difficulty: '0x0',
+  gasLimit: '0x1c9c380',
+  gasUsed: '0x0',
+  miner: '0x0000000000000000000000000000000000000000',
+  extraData: '0x',
+  baseFeePerGas: '0x3b9aca00',
+  transactions: []
+}
+
+function createProvider () {
+  const handlers = {
+    eth_chainId: () => '0x1',
+    net_version: () => '1',
+    eth_gasPrice: () => '0x3b9aca00',
+    eth_maxPriorityFeePerGas: () => '0x3b9aca00',
+    eth_getBlockByNumber: () => DUMMY_BLOCK
+  }
+
+  return {
+    request: jest.fn(async ({ method, params }) => {
+      const handler = handlers[method]
+      if (!handler) throw new Error(`Unexpected rpc method: ${method}`)
+      return handler(params)
+    })
+  }
+}
+
 describe('WalletManagerEvm', () => {
   let wallet
 
   beforeEach(async () => {
     const root = new SeedSignerEvm(SEED_PHRASE)
-    wallet = new WalletManagerEvm(root, { provider: RPC_URL })
+    wallet = new WalletManagerEvm(root, { provider: createProvider() })
   })
 
   afterEach(() => {
@@ -150,6 +181,8 @@ describe('WalletManagerEvm', () => {
 
   describe('getFeeRates', () => {
     test('should return the correct fee rates', async () => {
+      // maxFeePerGas = 2 * baseFee (1 gwei) + priorityFee (1 gwei) = 3 gwei;
+      // normal is 110% and fast 200% of that.
       const feeRates = await wallet.getFeeRates()
 
       expect(feeRates.normal).toBe(3_300_000_000n)
