@@ -31,7 +31,9 @@ function createProvider () {
     net_version: () => '1',
     eth_gasPrice: () => '0x3b9aca00',
     eth_maxPriorityFeePerGas: () => '0x3b9aca00',
-    eth_getBlockByNumber: () => DUMMY_BLOCK
+    eth_getBlockByNumber: () => DUMMY_BLOCK,
+    eth_estimateGas: () => '0x5208',
+    eth_getTransactionCount: () => '0x0'
   }
 
   return {
@@ -176,6 +178,42 @@ describe('WalletManagerEvm', () => {
 
       await expect(wallet.getAccountByPath("0'/0/0", { signerName: 'hot' }))
         .rejects.toThrow('PrivateKeySignerEvm does not support derivation.')
+    })
+  })
+
+  describe('dispose', () => {
+    test('should dispose the wallet and erase the private keys of the accounts', async () => {
+      const account0 = await wallet.getAccount(0)
+
+      const account1 = await wallet.getAccount(1)
+
+      wallet.dispose()
+
+      const MESSAGE = 'Hello, world!'
+
+      const TRANSACTION = {
+        to: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
+        value: 1_000
+      }
+
+      const TRANSFER = {
+        token: '0x4CC1D60C268B68a7019034E6dE7Fb05d82d827E0',
+        recipient: '0xa460AEbce0d3A4BecAd8ccf9D6D4861296c503Bd',
+        amount: 100
+      }
+
+      for (const account of [account0, account1]) {
+        expect(account.keyPair.privateKey).toBe(null)
+
+        // Once disposed, the underlying signer is cleared, so any signing operation
+        // fails when it reaches the now-undefined signer rather than for some other reason.
+        await expect(account.sign(MESSAGE))
+          .rejects.toThrow(/Cannot read properties of undefined \(reading 'signMessage'\)/)
+        await expect(account.sendTransaction(TRANSACTION))
+          .rejects.toThrow(/Cannot read properties of undefined \(reading 'signTransaction'\)/)
+        await expect(account.transfer(TRANSFER))
+          .rejects.toThrow(/Cannot read properties of undefined \(reading 'signTransaction'\)/)
+      }
     })
   })
 
