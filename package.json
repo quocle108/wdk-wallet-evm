@@ -24,9 +24,7 @@
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --testPathIgnorePatterns=/tests/integration/",
     "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathIgnorePatterns=/tests/integration/",
     "test:integration": "concurrently -k -s first -n \"NODE,TEST\" -c \"black,green\" --hide NODE \"npx hardhat node --network hardhat\" \"npm run test-integration-wait\"",
-    "test-integration-wait": "wait-on tcp:127.0.0.1:8545 && cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration --runInBand",
-    "test:integration:coverage": "concurrently -k -s first -n \"NODE,TEST\" -c \"black,green\" --hide NODE \"npx hardhat node --network hardhat\" \"npm run test-integration-wait:coverage\"",
-    "test-integration-wait:coverage": "wait-on tcp:127.0.0.1:8545 && cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration --coverage --runInBand"
+    "test-integration-wait": "wait-on tcp:127.0.0.1:8545 && cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration --runInBand"
   },
   "dependencies": {
     "@noble/hashes": "1.8.0",
